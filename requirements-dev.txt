@@ -1,0 +1,15 @@
+# Development dependencies — not needed to run, only to develop/test/lint
+-r requirements.txt
+
+# Testing
+pytest>=8.0
+pytest-cov>=5.0
+
+# Linting & formatting (ruff replaces black + isort + flake8)
+ruff>=0.5
+
+# Type checking (optional but recommended)
+mypy>=1.10
+
+# Pre-commit hooks (set up later — keeping first phase simple)
+# pre-commit>=3.7

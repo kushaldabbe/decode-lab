@@ -1,0 +1,19 @@
+# Runtime dependencies for decode-lab
+# Pin major.minor versions; let patch float for security fixes.
+# Generated manually — regenerate with `pip freeze > requirements.txt` after stable.
+
+# Core ML stack
+torch>=2.2,<3.0
+transformers>=4.40,<5.0
+accelerate>=0.30,<1.0
+safetensors>=0.4
+
+# Measurement & output
+matplotlib>=3.8
+tqdm>=4.66
+
+# Config / CLI
+pydantic>=2.6
+
+# HuggingFace Hub (transitive via transformers, but explicit for CLI auth)
+huggingface-hub>=0.23
