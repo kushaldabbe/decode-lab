@@ -1,28 +1,25 @@
 """Entry point for `python -m decode_lab`.
 
-This is intentionally a stub. You will implement the actual decode + measurement
-logic yourself, following the project README and your notes.
+Loads SmolLM2-135M (fp16) on CUDA and measures inference performance across
+three prompt lengths (short / medium / long).
 
-Suggested implementation order:
-1. Print environment info (this file, partially done below).
-2. Load a small model + tokenizer (e.g., HuggingFaceTB/SmolLM2-135M).
-3. Tokenize a prompt and time it.
-4. Run model.forward once on the prompt (this is the PREFILL) and time it.
-5. Loop: feed last token back in, generate next token (this is the DECODE).
-6. Measure TTFT, decode throughput, total latency, peak GPU memory.
+For each prompt, measures:
+- TTFT (s): single `model(**inputs)` forward pass, timed with cuda.synchronize.
+- Total generation time (s): `model.generate(max_new_tokens=50)`.
+- Decode throughput (tok/s): `50 / (total - ttft)` — excludes prefill.
 
-Rules:
-- Write the code yourself. Use AI only for explanation, debugging hints, review.
-- Add type hints to every function signature.
-- Use `logging` (or `structlog`) for measurement output, not bare print statements.
+A warmup forward pass runs before measurement to eliminate first-call JIT
+overhead. Results are logged as a GitHub-style table per prompt.
 """
 
 from __future__ import annotations
 
 import logging
-
 import torch
+import time
+
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from tabulate import tabulate
 
 logger = logging.getLogger(__name__)
 
@@ -41,21 +38,62 @@ def print_environment() -> None:
             torch.cuda.get_device_properties(0).total_memory / 1e9,
         )
 
-
+@torch.inference_mode()
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     print_environment()
 
     checkpoint = "HuggingFaceTB/SmolLM2-135M"
     device = "cuda"
-    tokenizer = AutoTokenizer.from_pretrained(checkpoint)
+    tokenizer = AutoTokenizer.from_pretrained(checkpoint, dtype=torch.float16)
+    tokenizer.pad_token = tokenizer.eos_token
 
-    model = AutoModelForCausalLM.from_pretrained(checkpoint).to(device)
+    model = AutoModelForCausalLM.from_pretrained(checkpoint, dtype=torch.float16).to(device)
 
-    inputs = tokenizer.encode("Gravity is", return_tensors="pt").to(device)
-    outputs = model.generate(inputs, max_new_tokens=100)
+    # Warmup - GPU go brrrr
+    inputs = tokenizer("Hello there!", return_tensors="pt").to(device)
+    _ = model(**inputs)
 
-    logger.info(tokenizer.decode(outputs[0]))
+    input_texts = [
+        # Short (~5 tokens)
+        "The cat sat quietly.",
+
+        # Medium (~32 tokens)
+        "Artificial intelligence is transforming software development by helping engineers write code, debug complex systems, understand unfamiliar repositories, and automate repetitive tasks, allowing teams to deliver features faster while maintaining high quality.",
+
+        # Long (~128 tokens)
+        "Large language models process text by first converting it into tokens, then performing a prefill stage that builds the attention cache from the prompt before entering the decode stage where new tokens are generated one at a time. Measuring metrics such as time to first token, decode latency, and output throughput helps engineers understand inference performance. Optimizing batching, cache reuse, memory bandwidth, quantization, and scheduling can significantly improve responsiveness while reducing infrastructure costs. Careful benchmarking across different prompt lengths and output sizes provides a realistic view of production behavior and reveals bottlenecks that synthetic microbenchmarks might otherwise miss."
+    ]
+
+
+    for prompt in input_texts:
+        inputs = tokenizer(prompt, return_tensors="pt").to(device)
+        torch.cuda.synchronize()
+        t0 = time.perf_counter()
+        # GPU work
+        output = model(**inputs)
+        next_token = output.logits[:,-1,:].argmax(dim=-1)
+        torch.cuda.synchronize()
+        t1 = time.perf_counter()
+        ttft = t1 - t0
+
+        # Total generation
+        torch.cuda.synchronize()
+        t2 = time.perf_counter()
+        out = model.generate(**inputs, max_new_tokens=50, pad_token_id=tokenizer.eos_token_id)
+        torch.cuda.synchronize()
+        total_time = time.perf_counter() - t2
+
+        # Decode througput
+        decode_tp = 50/(total_time-ttft)
+
+        table = [
+            ["Prompt length (tokens)", inputs.input_ids.shape[-1]],
+            ["TTFT (s)", ttft],
+            ["Total gen time (s)", total_time],
+            ["Decode throughput", decode_tp]
+        ]
+        logger.info("\n%s", tabulate(table, headers=["Metric", "Value"], tablefmt="github"))
 
 if __name__ == "__main__":
     main()

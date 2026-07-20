@@ -17,3 +17,4 @@ pydantic>=2.6
 
 # HuggingFace Hub (transitive via transformers, but explicit for CLI auth)
 huggingface-hub>=0.23
+tabulate>=0.10.0
