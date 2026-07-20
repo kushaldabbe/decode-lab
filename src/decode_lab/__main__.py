@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 
 import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 logger = logging.getLogger(__name__)
 
@@ -45,10 +46,16 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     print_environment()
 
-    # TODO: your implementation goes here.
-    # See README.md "Definition of done" for what to build.
-    logger.warning("decode_lab: not yet implemented — see src/decode_lab/__main__.py")
+    checkpoint = "HuggingFaceTB/SmolLM2-135M"
+    device = "cuda"
+    tokenizer = AutoTokenizer.from_pretrained(checkpoint)
 
+    model = AutoModelForCausalLM.from_pretrained(checkpoint).to(device)
+
+    inputs = tokenizer.encode("Gravity is", return_tensors="pt").to(device)
+    outputs = model.generate(inputs, max_new_tokens=100)
+
+    logger.info(tokenizer.decode(outputs[0]))
 
 if __name__ == "__main__":
     main()
