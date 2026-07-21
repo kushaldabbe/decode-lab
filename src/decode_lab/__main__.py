@@ -10,6 +10,8 @@ For each prompt, measures:
 
 A warmup forward pass runs before measurement to eliminate first-call JIT
 overhead. Results are logged as a GitHub-style table per prompt.
+
+Added a multi-model loop to compare and verify the results on different models
 """
 
 from __future__ import annotations
@@ -43,57 +45,78 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     print_environment()
 
-    checkpoint = "HuggingFaceTB/SmolLM2-135M"
     device = "cuda"
-    tokenizer = AutoTokenizer.from_pretrained(checkpoint, dtype=torch.float16)
-    tokenizer.pad_token = tokenizer.eos_token
+    # model_list = ["HuggingFaceTB/SmolLM2-135M", "Qwen/Qwen2.5-0.5B", "microsoft/Phi-1.5"]
+    model_list = ["HuggingFaceTB/SmolLM2-135M", "gpt2"]
 
-    model = AutoModelForCausalLM.from_pretrained(checkpoint, dtype=torch.float16).to(device)
+    for checkpoint in model_list:
+        tokenizer = AutoTokenizer.from_pretrained(checkpoint)
+        tokenizer.pad_token = tokenizer.eos_token
 
-    # Warmup - GPU go brrrr
-    inputs = tokenizer("Hello there!", return_tensors="pt").to(device)
-    _ = model(**inputs)
+        model = AutoModelForCausalLM.from_pretrained(checkpoint, dtype=torch.float16).to(device)
+        mem_weights_only = torch.cuda.memory_allocated() / 1024 ** 3
 
-    input_texts = [
-        # Short (~5 tokens)
-        "The cat sat quietly.",
+        # Switching from FP16 to FP32 for both the tokenizer and the model,
+        # results in Memory --> ~double and Throughput --> ~Halve
 
-        # Medium (~32 tokens)
-        "Artificial intelligence is transforming software development by helping engineers write code, debug complex systems, understand unfamiliar repositories, and automate repetitive tasks, allowing teams to deliver features faster while maintaining high quality.",
+        # Warmup - GPU go brrrr
+        inputs = tokenizer("Hello there!", return_tensors="pt").to(device)
+        _ = model(**inputs)
 
-        # Long (~128 tokens)
-        "Large language models process text by first converting it into tokens, then performing a prefill stage that builds the attention cache from the prompt before entering the decode stage where new tokens are generated one at a time. Measuring metrics such as time to first token, decode latency, and output throughput helps engineers understand inference performance. Optimizing batching, cache reuse, memory bandwidth, quantization, and scheduling can significantly improve responsiveness while reducing infrastructure costs. Careful benchmarking across different prompt lengths and output sizes provides a realistic view of production behavior and reveals bottlenecks that synthetic microbenchmarks might otherwise miss."
-    ]
+        input_texts = [
+            # Short (~5 tokens)
+            "The cat sat quietly.",
 
+            # Medium (~32 tokens)
+            "Artificial intelligence is transforming software development by helping engineers write code, debug complex systems, understand unfamiliar repositories, and automate repetitive tasks, allowing teams to deliver features faster while maintaining high quality.",
 
-    for prompt in input_texts:
-        inputs = tokenizer(prompt, return_tensors="pt").to(device)
-        torch.cuda.synchronize()
-        t0 = time.perf_counter()
-        # GPU work
-        output = model(**inputs)
-        next_token = output.logits[:,-1,:].argmax(dim=-1)
-        torch.cuda.synchronize()
-        t1 = time.perf_counter()
-        ttft = t1 - t0
-
-        # Total generation
-        torch.cuda.synchronize()
-        t2 = time.perf_counter()
-        out = model.generate(**inputs, max_new_tokens=50, pad_token_id=tokenizer.eos_token_id)
-        torch.cuda.synchronize()
-        total_time = time.perf_counter() - t2
-
-        # Decode througput
-        decode_tp = 50/(total_time-ttft)
-
-        table = [
-            ["Prompt length (tokens)", inputs.input_ids.shape[-1]],
-            ["TTFT (s)", ttft],
-            ["Total gen time (s)", total_time],
-            ["Decode throughput", decode_tp]
+            # Long (~128 tokens)
+            "Large language models process text by first converting it into tokens, then performing a prefill stage that builds the attention cache from the prompt before entering the decode stage where new tokens are generated one at a time. Measuring metrics such as time to first token, decode latency, and output throughput helps engineers understand inference performance. Optimizing batching, cache reuse, memory bandwidth, quantization, and scheduling can significantly improve responsiveness while reducing infrastructure costs. Careful benchmarking across different prompt lengths and output sizes provides a realistic view of production behavior and reveals bottlenecks that synthetic microbenchmarks might otherwise miss."
         ]
-        logger.info("\n%s", tabulate(table, headers=["Metric", "Value"], tablefmt="github"))
+
+
+        for prompt in input_texts:
+            inputs = tokenizer(prompt, return_tensors="pt").to(device)
+            torch.cuda.synchronize()
+            t0 = time.perf_counter()
+            # GPU work
+            output = model(**inputs)
+            _ = output.logits[:,-1,:].argmax(dim=-1)
+            torch.cuda.synchronize()
+            t1 = time.perf_counter()
+            ttft = t1 - t0
+
+            # Total generation
+            torch.cuda.synchronize()
+            t2 = time.perf_counter()
+            torch.cuda.reset_peak_memory_stats()
+            out = model.generate(**inputs, max_new_tokens=50, min_new_tokens=50, pad_token_id=tokenizer.eos_token_id)
+            actual_new_tokens = out.shape[-1] - inputs.input_ids.shape[-1]
+            logger.info("\n%s", actual_new_tokens)
+            torch.cuda.synchronize()
+            max_mem = torch.cuda.max_memory_allocated() / 1024**3
+            total_time = time.perf_counter() - t2
+
+            # Decode througput
+            decode_tp = 50/(total_time-ttft)
+
+            table = [
+                ["Prompt length (tokens)", inputs.input_ids.shape[-1]],
+                ["TTFT (s)", ttft],
+                ["Total gen time (s)", total_time],
+                ["Decode throughput", decode_tp],
+                ["Model weight mem (GB)", mem_weights_only],
+                ["Peak inference mem (GB)", max_mem],
+                ["Inference overhead (GB)", max_mem - mem_weights_only]
+            ]
+
+            logger.info("\n%s", tabulate(table, headers=["Metric", "Value"], tablefmt="github"))
+        
+        # Free VRAM before loading the next model
+        del model
+        del tokenizer
+        torch.cuda.empty_cache()
+
 
 if __name__ == "__main__":
     main()
