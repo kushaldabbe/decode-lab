@@ -5,7 +5,7 @@ description = "Single-request decode measurement lab for learning LLM inference"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-authors = [{ name = "Your Name" }]
+authors = [{ name = "Kushal Dabbe", email = "kushaldabbe752@gmail.com" }]
 # Runtime dependencies also listed in requirements.txt for pip-only users.
 # dependencies = []
 

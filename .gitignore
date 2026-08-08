@@ -46,8 +46,12 @@ data/
 downloads/
 hf_cache/
 .cache/
+
+# Keep the committed example results; ignore any new run outputs.
 results/*
 !results/.gitkeep
+!results/*.csv
+!results/*.png
 
 # Secrets / env
 .env
