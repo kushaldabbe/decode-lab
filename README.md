@@ -50,6 +50,10 @@ Interpretation:
 - **Decode throughput is flat across prompt lengths** but scales with model size. This is the signature of a memory-bandwidth-bound decode phase: each decoded token re-reads the full weight matrix, so throughput depends on parameter count and memory bandwidth rather than sequence length.
 - **TTFT grows with prompt length**, since prefill is a compute-bound forward pass over the full prompt.
 
+![TTFT vs prompt length](results/ttft_vs_prompt.png)
+![Decode throughput by model](results/throughput_vs_model.png)
+![Memory breakdown](results/memory_breakdown.png)
+
 ## Installation
 
 ```powershell
