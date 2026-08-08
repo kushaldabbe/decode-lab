@@ -1,43 +1,40 @@
-# decode-lab — Single-Request Decode Lab
+# decode-lab
 
-> First proof-of-work project in the LLM inference learning journey.
+Single-request LLM decode measurement tool. Profiles prefill and decode phases of a causal language model on GPU and reports TTFT, decode throughput, and peak memory usage.
 
-## Goal
+## Overview
 
-Build a small local experiment that runs a single prompt through a causal language model and teaches you the foundations of LLM inference:
+`decode_lab` loads a causal language model, runs a single prompt through a fixed-length generation, and measures:
 
-- tokenization
-- prefill vs decode
-- autoregressive generation
-- TTFT (time to first token)
-- tokens/sec
-- GPU memory usage
-
-## What you will build
-
-A Python module (`decode_lab`) that:
-
-1. Loads a small causal LM locally.
-2. Tokenizes one prompt.
-3. Runs generation for a fixed number of output tokens.
-4. Prints clean measurements.
-
-## Minimum outputs
-
-For each run, capture:
-
-| Metric | Description |
+| Metric | Definition |
 |---|---|
-| Input token count | Tokens in the prompt |
-| Output token count | Tokens generated |
 | TTFT | Time to first token (prefill latency) |
-| Decode throughput | tokens/sec during decode phase |
+| Decode throughput | Tokens/sec during the decode phase |
 | Total latency | End-to-end wall clock |
-| Peak GPU memory | `torch.cuda.max_memory_allocated()` |
+| Peak GPU memory | `torch.cuda.max_memory_allocated()` after generation |
 
-## Example results (GTX 1650 Ti, fp16)
+Timing uses `time.perf_counter()` paired with `torch.cuda.synchronize()`. A warmup forward pass precedes measurement to eliminate first-call JIT/autotune overhead, and models are freed between runs (`del` + `torch.cuda.empty_cache()`). Outputs are written as CSV plus plots to `results/`.
 
-Committed sample run (see `results/`). All metrics from a single request, no batching.
+## Usage
+
+```powershell
+python -m decode_lab
+```
+
+By default this runs `SmolLM2-135M` and `gpt2` in fp16 on CUDA across three prompt lengths, then writes:
+
+- `results/run_<timestamp>.csv` — raw measurements
+- `results/ttft_vs_prompt.png` — TTFT vs prompt length, per model
+- `results/throughput_vs_model.png` — mean decode throughput per model
+- `results/memory_breakdown.png` — weights vs inference overhead per model
+
+### Models
+
+The model list and input prompts are defined as constants in `src/decode_lab/__main__.py` (`MODEL_LIST`, `INPUT_TEXTS`). Any causal LM from the Hugging Face hub can be substituted; small models are appropriate for consumer GPUs (e.g. 4 GB VRAM).
+
+## Results
+
+Sample run on a GTX 1650 Ti (fp16, single request, no batching) — see `results/`.
 
 | Model | Prompt len | TTFT (s) | Decode throughput (tok/s) | Peak mem (GB) |
 |---|---|---|---|---|
@@ -48,81 +45,35 @@ Committed sample run (see `results/`). All metrics from a single request, no bat
 | gpt2 | 37 | 0.132 | 103.9 | 0.270 |
 | gpt2 | 121 | 0.232 | 105.8 | 0.284 |
 
-Reading: decode throughput is **flat across prompt lengths** but scales with model size — the classic signature of a **memory-bandwidth-bound** decode phase (each new token re-reads the full weights; larger models are slower per token). TTFT grows with prompt length (more prefill compute). Plots in `results/ttft_vs_prompt.png`, `results/throughput_vs_model.png`, `results/memory_breakdown.png`.
+Interpretation:
 
-## Setup
+- **Decode throughput is flat across prompt lengths** but scales with model size. This is the signature of a memory-bandwidth-bound decode phase: each decoded token re-reads the full weight matrix, so throughput depends on parameter count and memory bandwidth rather than sequence length.
+- **TTFT grows with prompt length**, since prefill is a compute-bound forward pass over the full prompt.
+
+## Installation
 
 ```powershell
-# From the decode-lab directory
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 pip install -r requirements-dev.txt
 ```
 
-## Run
-
-```powershell
-python -m decode_lab
-```
-
-## Suggested models for GTX 1650 Ti (4GB VRAM)
-
-| Model | Size | Why |
-|---|---|---|
-| `sshleifer/tiny-gpt2` | ~3 MB | Smoke test only — verifies pipeline |
-| `HuggingFaceTB/SmolLM2-135M` | ~270 MB | First real model — fast, modern |
-| `gpt2` | ~500 MB | The classic baseline |
-| `Qwen/Qwen2.5-0.5B` | ~1 GB | Modern, capable, small |
-| `microsoft/Phi-1.5` | ~3 GB | Pushes your GPU — good for memory profiling |
-
-Start with `SmolLM2-135M`. Graduate up.
-
 ## Project layout
 
 ```
 decode-lab/
-├── .venv/               Virtual env (NOT committed)
-├── results/             Example measurement outputs (CSV, plots) — committed
-├── src/
-│   └── decode_lab/      The importable Python package
-│       ├── __init__.py
-│       └── __main__.py  Entry point for `python -m decode_lab`
-├── tests/               Pytest tests
-│   └── test_basic.py
-├── .gitignore
-├── .gitattributes       Line-ending normalization
-├── .python-version      Pins Python version (pyenv / uv compatible)
-├── pyproject.toml       Tool config (ruff, pytest, mypy) + project metadata
-├── README.md            This file
-├── requirements.txt     Runtime dependencies (pinned)
-└── requirements-dev.txt Dev dependencies (pytest, ruff)
+├── results/          Measurement outputs (CSV, plots)
+├── src/decode_lab/   Package; __main__.py is the entry point
+├── tests/            Pytest smoke tests
+├── pyproject.toml    Project metadata + tool config (ruff, pytest, mypy)
+├── requirements.txt  Runtime dependencies
+└── requirements-dev.txt
 ```
 
-> Personal lab notes (observations, questions) are kept in a private journal, not in this public repo.
+## Development
 
-## Questions you should be able to answer after this project
-
-1. What happens during prefill?
-2. What changes during decode?
-3. Why is decode usually memory-bandwidth sensitive?
-4. Why does batch size affect throughput and latency differently?
-5. What exactly does TTFT include?
-
-## Definition of done
-
-You are done when you can:
-
-- [ ] Run one prompt end-to-end
-- [ ] Produce all 6 measurements in a clean table
-- [ ] Explain each number in your own words (write it in `../notes/decode-lab/observations.md` in the private journal)
-- [ ] Test passes: `pytest`
-- [ ] Code passes lint: `ruff check .`
-
-## Working rules
-
-- **Write the code yourself.** AI is for explanation, debugging hints, and review — not writing the implementation.
-- Prefer simple, readable code over clever abstractions.
-- Commit early and often, with clear messages.
-- Type hints on every function signature.
-- `logging` module for measurement output (not `print` for production code).
+```powershell
+pytest
+ruff check .
+```
